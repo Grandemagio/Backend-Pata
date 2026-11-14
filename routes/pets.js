@@ -5,8 +5,9 @@ const express = require('express');
 const multer = require('multer');
 const router = express.Router();
 const db = require('../db');
-const { autenticar, somenteEquipe } = require('../auth');
+const { autenticar, somenteEquipe, ongDaEquipe } = require('../auth');
 const { COLUNAS_ANIMAL, formatarAnimal } = require('../util');
+const { registrar } = require('../historico');
 
 // Colunas da tabela "animais" que a API aceita receber
 const campos = [
@@ -60,15 +61,31 @@ const upload = multer({
 
 // ---------- Rotas públicas (qualquer pessoa vê) ----------
 
+// Confere se o animal existe e é da ONG de quem está logado. Se não, já responde o erro e devolve null.
+async function animalDaOng(req, res, id) {
+    const [r] = await db.query('SELECT id, nome, ong_id FROM animais WHERE id = ?', [id]);
+    if (r.length === 0) {
+        res.status(404).json({ mensagem: 'Animal não encontrado.' });
+        return null;
+    }
+    const ong = await ongDaEquipe(req.usuario.id);
+    if (ong && Number(r[0].ong_id) !== ong) {
+        res.status(403).json({ mensagem: 'Este animal pertence a outra ONG.' });
+        return null;
+    }
+    return { animal: r[0], ong: ong };
+}
+
 // GET /pets  -> lista os animais. Filtros opcionais na URL:
 //   ?status=disponivel  ?especie=Cachorro  ?porte=pequeno  ?faixa=filhote|adulto  ?busca=luna
 router.get('/', async (req, res) => {
     try {
-        const { status, especie, porte, faixa, busca } = req.query;
+        const { status, especie, porte, faixa, busca, ong_id } = req.query;
         const condicoes = [];
         const valores = [];
 
         if (status) { condicoes.push('a.status = ?'); valores.push(status); }
+        if (ong_id) { condicoes.push('a.ong_id = ?'); valores.push(ong_id); }
         if (especie) { condicoes.push('a.especie = ?'); valores.push(especie); }
         if (porte) { condicoes.push('a.porte = ?'); valores.push(porte); }
         if (faixa === 'filhote') { condicoes.push('TIMESTAMPDIFF(MONTH, a.data_nascimento, CURDATE()) < 12'); }
@@ -118,6 +135,10 @@ router.post('/', autenticar, somenteEquipe, async (req, res) => {
     try {
         const body = req.body || {};
 
+        // quem é de uma ONG só cadastra animais da própria ONG
+        const ongEquipe = await ongDaEquipe(req.usuario.id);
+        if (ongEquipe) body.ong_id = ongEquipe;
+
         if (!body.nome) {
             return res.status(400).json({ mensagem: 'Informe o nome do animal.' });
         }
@@ -130,6 +151,7 @@ router.post('/', autenticar, somenteEquipe, async (req, res) => {
         const sql = 'INSERT INTO animais (' + colunas.join(', ') + ') VALUES (' + interrogacoes + ')';
 
         const [resultado] = await db.query(sql, valores);
+        await registrar(req.usuario, 'cadastrou', 'animal', resultado.insertId, body.nome, body.ong_id);
         res.status(201).json({ mensagem: 'Animal cadastrado!', id: resultado.insertId });
     } catch (erro) {
         console.log(erro);
@@ -146,6 +168,10 @@ router.put('/:id', autenticar, somenteEquipe, async (req, res) => {
             return res.status(400).json({ mensagem: 'Status inválido. Use: ' + statusPermitidos.join(', ') });
         }
 
+        const dono = await animalDaOng(req, res, req.params.id);
+        if (!dono) return;
+        if (dono.ong) delete body.ong_id;   // a ONG não passa o animal para outra
+
         const { colunas, valores } = pegarCampos(body);
         if (colunas.length === 0) {
             return res.status(400).json({ mensagem: 'Informe ao menos um campo para atualizar.' });
@@ -159,6 +185,7 @@ router.put('/:id', autenticar, somenteEquipe, async (req, res) => {
         if (resultado.affectedRows === 0) {
             return res.status(404).json({ mensagem: 'Animal não encontrado.' });
         }
+        await registrar(req.usuario, 'atualizou', 'animal', Number(req.params.id), dono.animal.nome, dono.animal.ong_id);
         res.json({ mensagem: 'Animal atualizado!' });
     } catch (erro) {
         console.log(erro);
@@ -180,6 +207,11 @@ router.post('/:id/foto', autenticar, somenteEquipe, (req, res) => {
         }
 
         try {
+            const dono = await animalDaOng(req, res, req.params.id);
+            if (!dono) {
+                fs.unlink(req.file.path, () => {});
+                return;
+            }
             const caminho = '/uploads/' + req.file.filename;
             const [resultado] = await db.query('UPDATE animais SET foto_url = ? WHERE id = ?', [caminho, req.params.id]);
 
@@ -187,6 +219,7 @@ router.post('/:id/foto', autenticar, somenteEquipe, (req, res) => {
                 fs.unlink(req.file.path, () => {});   // animal não existe: apaga a foto enviada
                 return res.status(404).json({ mensagem: 'Animal não encontrado.' });
             }
+            await registrar(req.usuario, 'atualizou a foto de', 'animal', Number(req.params.id), dono.animal.nome, dono.animal.ong_id);
             res.json({ mensagem: 'Foto salva!', foto_url: caminho });
         } catch (erro) {
             console.log(erro);
@@ -198,11 +231,11 @@ router.post('/:id/foto', autenticar, somenteEquipe, (req, res) => {
 // DELETE /pets/:id  -> remove um animal
 router.delete('/:id', autenticar, somenteEquipe, async (req, res) => {
     try {
-        const [resultado] = await db.query('DELETE FROM animais WHERE id = ?', [req.params.id]);
+        const dono = await animalDaOng(req, res, req.params.id);
+        if (!dono) return;
 
-        if (resultado.affectedRows === 0) {
-            return res.status(404).json({ mensagem: 'Animal não encontrado.' });
-        }
+        await db.query('DELETE FROM animais WHERE id = ?', [req.params.id]);
+        await registrar(req.usuario, 'removeu', 'animal', Number(req.params.id), dono.animal.nome, dono.animal.ong_id);
         res.json({ mensagem: 'Animal removido!' });
     } catch (erro) {
         // O banco não deixa apagar um animal que já tem pedido de adoção

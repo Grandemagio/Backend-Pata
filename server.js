@@ -16,6 +16,10 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Rotas de cada assunto, cada uma no seu arquivo
 app.use('/usuarios', require('./routes/usuarios'));
+app.use('/admins', require('./routes/admins'));
+app.use('/ongs', require('./routes/ongs'));
+app.use('/historico', require('./routes/historico'));
+app.use('/chat', require('./routes/chat'));
 app.use('/pets', require('./routes/pets'));
 app.use('/favoritos', require('./routes/favoritos'));
 app.use('/adotantes', require('./routes/adotantes'));
@@ -52,6 +56,10 @@ app.use((erro, req, res, next) => {
     }
     console.log(erro);
     res.status(500).json({ mensagem: 'Erro interno da API.' });
+});
+
+require('./migracoes').atualizarBanco().catch((erro) => {
+    console.log('Aviso: não foi possível atualizar o banco automaticamente: ' + erro.message);
 });
 
 const PORT = process.env.PORT || 3001;

@@ -80,6 +80,8 @@ CREATE TABLE IF NOT EXISTS adocoes (
     data_solicitacao DATE NOT NULL DEFAULT (CURRENT_DATE),
     data_conclusao DATE NULL,
     observacoes TEXT NULL,
+    compatibilidade TINYINT UNSIGNED NULL,   -- % de match no momento do pedido
+    motivos TEXT NULL,                       -- motivos do match (JSON)
     PRIMARY KEY (id),
     KEY idx_adocoes_adotante (adotante_id),
     KEY idx_adocoes_animal (animal_id),

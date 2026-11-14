@@ -2,56 +2,13 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
-const { autenticar, donoOuEquipe } = require('../auth');
+const { autenticar, donoOuEquipe, somenteUsuario } = require('../auth');
 const { COLUNAS_ANIMAL, formatarAnimal } = require('../util');
+const { calcularMatch } = require('../compatibilidade');
 
-// Compara o perfil do adotante com um animal e devolve a pontuação (0 a 100)
-function calcularMatch(adotante, animal) {
-    let pontos = 0;
-    const motivos = [];
-
-    // Espaço (25 pontos)
-    if (adotante.espaco === animal.espaco) {
-        pontos += 25;
-        motivos.push('Espaço compatível');
-    }
-
-    // Atividade do adotante x energia do animal (20 pontos)
-    if (adotante.atividade === animal.energia) {
-        pontos += 20;
-        motivos.push('Nível de atividade compatível');
-    }
-
-    // Tempo disponível x atenção que o animal precisa (20 pontos)
-    if ((adotante.tempo === 'muito' && animal.atencao === 'muita') ||
-        (adotante.tempo === 'pouco' && animal.atencao === 'pouca')) {
-        pontos += 20;
-        motivos.push('Tempo disponível compatível');
-    }
-
-    // Experiência (15 pontos)
-    if (adotante.experiencia === animal.experiencia) {
-        pontos += 15;
-        motivos.push('Experiência compatível');
-    }
-
-    // Crianças (10 pontos)
-    if (animal.criancas !== null && Boolean(adotante.criancas) === Boolean(animal.criancas)) {
-        pontos += 10;
-        motivos.push('Compatível com crianças');
-    }
-
-    // Outros animais (10 pontos)
-    if (animal.outros_pets !== null && Boolean(adotante.outros_pets) === Boolean(animal.outros_pets)) {
-        pontos += 10;
-        motivos.push('Compatível com outros animais');
-    }
-
-    return { pontos: pontos, motivos: motivos };
-}
 
 // GET /match/adotante/:usuario_id  -> animais disponíveis, do mais ao menos compatível
-router.get('/adotante/:usuario_id', autenticar, async (req, res) => {
+router.get('/adotante/:usuario_id', autenticar, somenteUsuario, async (req, res) => {
     try {
         if (!donoOuEquipe(req, req.params.usuario_id)) {
             return res.status(403).json({ mensagem: 'Você só pode ver o seu próprio match.' });

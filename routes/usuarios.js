@@ -3,7 +3,10 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const router = express.Router();
 const db = require('../db');
-const { gerarToken, autenticar, somenteEquipe } = require('../auth');
+const { gerarToken, autenticar, somenteEquipe, ongDaEquipe } = require('../auth');
+const fs = require('fs');
+const { criarUpload, apagarImagemAntiga, mensagemErroUpload } = require('../uploadImagem');
+const uploadPerfil = criarUpload('perfil', (req) => req.usuario.id);
 const { emailValido } = require('../util');
 
 // Quem pode se cadastrar sozinho. "admin" e "voluntario" só são criados direto no banco.
@@ -11,7 +14,7 @@ const perfisPermitidos = ['adotante', 'padrinho', 'doador'];
 
 // Dados do usuário que podem ser mostrados (nunca o senha_hash)
 function dadosPublicos(u) {
-    return { id: u.id, nome: u.nome, email: u.email, telefone: u.telefone, perfil: u.perfil };
+    return { id: u.id, nome: u.nome, email: u.email, telefone: u.telefone, perfil: u.perfil, foto_url: u.foto_url || null };
 }
 
 // POST /usuarios/registro  -> cria um usuário novo (e já devolve o token de login)
@@ -122,6 +125,30 @@ router.put('/eu', autenticar, async (req, res) => {
     }
 });
 
+// PUT /usuarios/eu/email -> altera o e-mail após confirmar a senha atual
+router.put('/eu/email', autenticar, async (req, res) => {
+    try {
+        const b = req.body || {};
+        const email = String(b.email || '').trim().toLowerCase();
+        if (!email || !b.senha_atual) {
+            return res.status(400).json({ mensagem: 'Informe o novo e-mail e sua senha atual.' });
+        }
+        if (!emailValido(email)) {
+            return res.status(400).json({ mensagem: 'Informe um e-mail válido.' });
+        }
+        const [usuarios] = await db.query('SELECT senha_hash FROM usuarios WHERE id = ?', [req.usuario.id]);
+        if (!usuarios.length) return res.status(404).json({ mensagem: 'Usuário não encontrado.' });
+        const senhaCerta = await bcrypt.compare(String(b.senha_atual), usuarios[0].senha_hash);
+        if (!senhaCerta) return res.status(401).json({ mensagem: 'A senha atual está incorreta.' });
+        await db.query('UPDATE usuarios SET email = ? WHERE id = ?', [email, req.usuario.id]);
+        return res.json({ mensagem: 'E-mail atualizado com sucesso.', email });
+    } catch (erro) {
+        if (erro.code === 'ER_DUP_ENTRY') return res.status(409).json({ mensagem: 'Esse e-mail já está sendo usado por outra conta.' });
+        console.log(erro);
+        return res.status(500).json({ mensagem: 'Erro ao atualizar o e-mail.' });
+    }
+});
+
 // PUT /usuarios/eu/senha  -> troca a senha (precisa da senha atual)
 router.put('/eu/senha', autenticar, async (req, res) => {
     try {
@@ -156,6 +183,10 @@ router.put('/eu/senha', autenticar, async (req, res) => {
 // GET /usuarios  -> lista todos os usuários (só a equipe)
 router.get('/', autenticar, somenteEquipe, async (req, res) => {
     try {
+        // lista de todas as contas: só a administração geral (sem ONG). Cada ONG vê quem pediu os seus animais.
+        if (await ongDaEquipe(req.usuario.id)) {
+            return res.status(403).json({ mensagem: 'A lista de usuários não está disponível para contas de ONG.' });
+        }
         const [usuarios] = await db.query(
             'SELECT id, nome, email, telefone, perfil, criado_em FROM usuarios ORDER BY id DESC'
         );
@@ -163,6 +194,39 @@ router.get('/', autenticar, somenteEquipe, async (req, res) => {
     } catch (erro) {
         console.log(erro);
         res.status(500).json({ mensagem: 'Erro ao listar os usuários.' });
+    }
+});
+
+// POST /usuarios/eu/foto  -> troca a foto de perfil da PRÓPRIA conta (campo "foto" do formulário)
+router.post('/eu/foto', autenticar, (req, res) => {
+    uploadPerfil.single('foto')(req, res, async (erroUpload) => {
+        if (erroUpload) return res.status(400).json({ mensagem: mensagemErroUpload(erroUpload) });
+        if (!req.file) return res.status(400).json({ mensagem: 'Envie a imagem no campo "foto".' });
+
+        try {
+            const [atual] = await db.query('SELECT foto_url FROM usuarios WHERE id = ?', [req.usuario.id]);
+            const caminho = '/uploads/' + req.file.filename;
+            await db.query('UPDATE usuarios SET foto_url = ? WHERE id = ?', [caminho, req.usuario.id]);
+            apagarImagemAntiga(atual[0] && atual[0].foto_url);
+            res.json({ mensagem: 'Foto salva!', foto_url: caminho });
+        } catch (erro) {
+            fs.unlink(req.file.path, () => {});
+            console.log(erro);
+            res.status(500).json({ mensagem: 'Erro ao salvar a foto.' });
+        }
+    });
+});
+
+// DELETE /usuarios/eu/foto  -> remove a foto de perfil da própria conta
+router.delete('/eu/foto', autenticar, async (req, res) => {
+    try {
+        const [atual] = await db.query('SELECT foto_url FROM usuarios WHERE id = ?', [req.usuario.id]);
+        await db.query('UPDATE usuarios SET foto_url = NULL WHERE id = ?', [req.usuario.id]);
+        apagarImagemAntiga(atual[0] && atual[0].foto_url);
+        res.json({ mensagem: 'Foto removida.' });
+    } catch (erro) {
+        console.log(erro);
+        res.status(500).json({ mensagem: 'Erro ao remover a foto.' });
     }
 });
 

@@ -1,0 +1,11 @@
+Atualização do perfil do usuário
+
+A rota routes/usuarios.js inclui PUT /usuarios/eu/email.
+Requisição autenticada (Bearer token):
+{
+  "email": "novo@email.com",
+  "senha_atual": "senha atual"
+}
+
+Valida o e-mail, confirma a senha atual, atualiza usuarios.email e trata e-mail duplicado.
+Não exige alteração de tabela. Reinicie a API após substituir o arquivo.

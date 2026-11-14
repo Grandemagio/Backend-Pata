@@ -1,6 +1,7 @@
 // auth.js - login com token (JWT) e controle de quem pode fazer o quê
 require('dotenv').config();
 const jwt = require('jsonwebtoken');
+const db = require('./db');
 
 // O segredo é usado para "assinar" os tokens. Fica no .env, nunca no código.
 if (!process.env.JWT_SECRET) {
@@ -64,9 +65,23 @@ function somenteEquipe(req, res, next) {
     next();
 }
 
+// ONG da pessoa da equipe (usuarios.ong_id). Sem ONG (null) = administra a plataforma toda.
+async function ongDaEquipe(usuarioId) {
+    const [r] = await db.query('SELECT ong_id FROM usuarios WHERE id = ?', [usuarioId]);
+    return r.length && r[0].ong_id ? Number(r[0].ong_id) : null;
+}
+
+// Funções de adotante (pedir adoção, favoritos, match) não valem para contas da ONG
+function somenteUsuario(req, res, next) {
+    if (ehEquipe(req.usuario)) {
+        return res.status(403).json({ mensagem: 'Contas da ONG não usam as funções de adotante.' });
+    }
+    next();
+}
+
 // A própria pessoa ou a equipe podem mexer nos dados daquele usuário
 function donoOuEquipe(req, usuarioId) {
     return Number(req.usuario.id) === Number(usuarioId) || ehEquipe(req.usuario);
 }
 
-module.exports = { gerarToken, autenticar, autenticarOpcional, somenteEquipe, ehEquipe, donoOuEquipe };
+module.exports = { gerarToken, autenticar, autenticarOpcional, somenteEquipe, ehEquipe, donoOuEquipe, ongDaEquipe, somenteUsuario };

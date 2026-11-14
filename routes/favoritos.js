@@ -2,11 +2,11 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
-const { autenticar } = require('../auth');
+const { autenticar, somenteUsuario } = require('../auth');
 const { COLUNAS_ANIMAL, formatarAnimal } = require('../util');
 
 // Todas as rotas daqui exigem login
-router.use(autenticar);
+router.use(autenticar, somenteUsuario);
 
 // GET /favoritos  -> lista os animais favoritos de quem está logado
 router.get('/', async (req, res) => {
